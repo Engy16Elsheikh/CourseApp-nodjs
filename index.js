@@ -1,4 +1,9 @@
 require('dotenv').config()
+const dns = require('node:dns');
+
+dns.setServers(['8.8.8.8', '8.8.4.4']);
+
+require('dotenv').config();
 httpStatusText =require('./utils/httpServerText')
 const path = require('path')
 const cors=require('cors')
@@ -10,11 +15,17 @@ app.use('/uploads',express.static(path.join(__dirname,'uploads')))
 const coursesRouter=require('./routes/courses.rout')
 const usersRouter=require('./routes/user.rout')
 const mongoose=require('mongoose')
-const url=process.env.MONGO_URL
-mongoose.connect(url).then(()=>{
-    console.log('mongo db coonnected succefully')
-}
-)
+ 
+
+const url = process.env.MONGO_URL;
+
+mongoose.connect(url)
+    .then(() => {
+        console.log('MongoDB connected successfully');
+    })
+    .catch((error) => {
+        console.error('MongoDB connection failed:', error.message);
+    });
 app.use('/api/courses',coursesRouter)
 app.use('/api/users',usersRouter)
 app.all('*',(req,res,next)=>
