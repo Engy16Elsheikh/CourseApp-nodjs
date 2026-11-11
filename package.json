@@ -7,8 +7,8 @@
     "node": "22.x"
   },
   "scripts": {
-    "start": "node index.js",
-    "run:dev": "nodemon index.js"
+    "start": "node init && node index.js",
+    "run:dev": "node init && nodemon index.js"
   },
   "keywords": [],
   "author": "",
