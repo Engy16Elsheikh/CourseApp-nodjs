@@ -1,99 +1,105 @@
-const asyncWrapper = require('../middleware/asyncWrapper');
-const courseModel = require('../models/course.model');
 const multer = require('multer');
-const path = require('path');
-const Course=require('../models/course.model');
+const cloudinary = require('cloudinary').v2;
+const asyncWrapper = require('../middleware/asyncWrapper');
+const Course = require('../models/course.model');
 const appError = require('../utils/appError');
-const httpServerText=require('../utils/httpServerText')
-const getAllCourse=async(req,res)=>{
-  const query=req.query
-  const limit=query.limit||10;
-  const page =query.page||1;
-  const skip=(page-1)*limit
-  const courses=await Course.find({},{"__v":false}).limit(limit).skip(skip)
-  res.json({status:httpServerText.SUCCESS,data:{courses}})
-}
-const getSingleCourse = asyncWrapper(
-  async (req, res,next) => {
-    const course = await Course.findById(req.params.CourseId);
-    if (!course) {
-       const error=appError.create('course not found',404,httpServerText.FAIL)
-        return next(error)
-      //return res
-        //.status(404)
-        //.json({ status: httpServerText.FAIL, data: { course: "course not found" } });
-    }
-    return res.json({ status: httpServerText.SUCCESS, data: { course } });
-  }
-);
+const httpServerText = require('../utils/httpServerText');
 
-  
- // Set up multer for image uploads
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, './uploads/courses/');  // Save images in the "uploads/courses" folder
-  },
-  filename: (req, file, cb) => {
-    cb(null, Date.now() + path.extname(file.originalname));  // Use a timestamp to avoid name conflicts
-  }
+// ---------- Cloudinary ----------
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+// ---------- Multer (memory storage, Vercel's disk is read-only) ----------
 const upload = multer({
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 },  // Limit file size to 5MB (optional)
-}).single('courseImage');  // 'courseImage' is the field name in your form
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 4 * 1024 * 1024 }, // Vercel rejects bodies over ~4.5MB
+}).single('courseImage'); // 'courseImage' is the field name in the form
 
-// addCourse: handle course creation with an image upload
-const addCourse = async (req, res) => {
+const uploadToCloudinary = (buffer) =>
+  new Promise((resolve, reject) => {
+    cloudinary.uploader
+      .upload_stream({ folder: 'courses' }, (err, result) =>
+        err ? reject(err) : resolve(result)
+      )
+      .end(buffer);
+  });
+
+// ---------- Controllers ----------
+const getAllCourse = asyncWrapper(async (req, res) => {
+  const limit = parseInt(req.query.limit) || 10;
+  const page = parseInt(req.query.page) || 1;
+  const skip = (page - 1) * limit;
+
+  const courses = await Course.find({}, { __v: false }).limit(limit).skip(skip);
+  res.json({ status: httpServerText.SUCCESS, data: { courses } });
+});
+
+const getSingleCourse = asyncWrapper(async (req, res, next) => {
+  const course = await Course.findById(req.params.CourseId);
+  if (!course) {
+    const error = appError.create('course not found', 404, httpServerText.FAIL);
+    return next(error);
+  }
+  return res.json({ status: httpServerText.SUCCESS, data: { course } });
+});
+
+const addCourse = (req, res) => {
   upload(req, res, async (err) => {
     if (err) {
-      return res.status(400).json({ status: 'error', message: 'File upload failed' });
+      return res.status(400).json({ status: 'error', message: err.message });
     }
+    try {
+      let courseImage = null;
+      if (req.file) {
+        const result = await uploadToCloudinary(req.file.buffer);
+        courseImage = result.secure_url;
+      }
 
-    const newCourseData = {
-      title: req.body.title,
-      price: req.body.price,
-      courseImage: req.file ? '/uploads/courses/' + req.file.filename : null,  // Store the file path or null
-    };
+      const newCourse = await Course.create({
+        title: req.body.title,
+        price: req.body.price,
+        courseImage,
+      });
 
-    const newCourse = new Course(newCourseData);
-    await newCourse.save();
-
-    res.status(201).json({
-      status: httpServerText.SUCCESS,
-      data: { course: newCourse }
-    });
+      return res.status(201).json({
+        status: httpServerText.SUCCESS,
+        data: { course: newCourse },
+      });
+    } catch (e) {
+      return res.status(500).json({ status: 'error', message: e.message });
+    }
   });
 };
+
 const updateCourse = (req, res) => {
   upload(req, res, async (err) => {
     if (err) {
-      return res.status(400).json({ status: 'error', message: 'File upload failed' });
+      return res.status(400).json({ status: 'error', message: err.message });
     }
-
     try {
-      const CourseId = req.params.CourseId;
+      const updatedData = { ...req.body };
 
-      // Create an object for the fields to update
-      const updatedData = {
-        ...req.body,  // Spread the body fields
-      };
-
-      // If an image is uploaded, add it to the update data
       if (req.file) {
-        updatedData.courseImage = '/uploads/courses/' + req.file.filename;
+        const result = await uploadToCloudinary(req.file.buffer);
+        updatedData.courseImage = result.secure_url;
       }
 
-      // Perform the update
-      const UpdatedCourse = await Course.findByIdAndUpdate(CourseId, { $set: updatedData }, { new: true });
+      const updatedCourse = await Course.findByIdAndUpdate(
+        req.params.CourseId,
+        { $set: updatedData },
+        { new: true }
+      );
 
-      if (!UpdatedCourse) {
+      if (!updatedCourse) {
         return res.status(404).json({ status: 'error', message: 'Course not found' });
       }
 
       return res.status(200).json({
         status: httpServerText.SUCCESS,
-        data: { course: UpdatedCourse },
+        data: { course: updatedCourse },
       });
     } catch (e) {
       return res.status(400).json({ status: 'error', message: e.message });
@@ -101,22 +107,15 @@ const updateCourse = (req, res) => {
   });
 };
 
+const deleteCourse = asyncWrapper(async (req, res) => {
+  await Course.deleteOne({ _id: req.params.CourseId });
+  return res.status(200).json({ status: httpServerText.SUCCESS, data: null });
+});
 
-const deleteCourse=async(req, res) => {
-  try{
-    const data=await Course.deleteOne({_id:req.params.CourseId})
-    return res.status(200).json({ status:httpServerText.SUCCESS ,data:null});
-  }
-  catch(e){
-    return res.status(400).json({error:e});
-   }
-  }
-
-module.exports={
-    getAllCourse,
-    getSingleCourse,
-    addCourse,
-    updateCourse,
-    deleteCourse,
-
-}
+module.exports = {
+  getAllCourse,
+  getSingleCourse,
+  addCourse,
+  updateCourse,
+  deleteCourse,
+};
